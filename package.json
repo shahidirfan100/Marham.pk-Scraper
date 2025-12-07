@@ -1,17 +1,15 @@
 {
   "name": "marham-pk-doctors-scraper",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Comprehensive Marham.pk doctor listings scraper supporting JSON API and HTML parsing.",
   "type": "module",
   "scripts": {
     "start": "node src/main.js"
   },
   "dependencies": {
-    "apify": "^3.4.5",
-    "crawlee": "^3.14.1",
-    "cheerio": "^1.0.0-rc.12",
+    "apify": "^3.5.0",
+    "crawlee": "^3.15.1",
     "got-scraping": "^4.1.2",
-    "jsdom": "^27.1.0",
-    "header-generator": "^2.1.27"
+    "header-generator": "^2.1.78"
   }
 }

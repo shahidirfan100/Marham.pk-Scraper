@@ -1,8 +1,12 @@
 // Marham.pk doctors scraper - JSON API + HTML fallback
 import { Actor, log } from 'apify';
 import { CheerioCrawler, Dataset } from 'crawlee';
-import { load as cheerioLoad } from 'cheerio';
 import { gotScraping } from 'got-scraping';
+import { HeaderGenerator } from 'header-generator';
+
+const headerGenerator = new HeaderGenerator();
+
+const getStealthHeaders = (referer) => headerGenerator.getHeaders({}, referer ? { referer } : {});
 
 // Single-entrypoint main
 await Actor.init();
@@ -24,19 +28,12 @@ async function main() {
 
         const RESULTS_WANTED = Number.isFinite(+RESULTS_WANTED_RAW) ? Math.max(1, +RESULTS_WANTED_RAW) : Number.MAX_SAFE_INTEGER;
         const MAX_PAGES = Number.isFinite(+MAX_PAGES_RAW) ? Math.max(1, +MAX_PAGES_RAW) : 20;
-
-        // Always try JSON API first for better performance, fallback to HTML parsing
         const useJsonApi = true;
+        const allowHtmlFallback = true;
+        const JSON_API_LIMIT = 20;
 
         const toAbs = (href, base = 'https://www.marham.pk') => {
             try { return new URL(href, base).href; } catch { return null; }
-        };
-
-        const cleanText = (html) => {
-            if (!html) return '';
-            const $ = cheerioLoad(html);
-            $('script, style, noscript, iframe').remove();
-            return $.root().text().replace(/\s+/g, ' ').trim();
         };
 
         const buildStartUrl = (spec, cty) => {
@@ -48,138 +45,148 @@ async function main() {
             return `https://www.marham.pk/doctors/${specialtySlug}`;
         };
 
-        // Try JSON API first
-        const fetchDoctorsFromAPI = async (spec, cty, page = 1) => {
-            try {
-                const apiUrl = 'https://www.marham.pk/api/doctors/search';
-                const response = await gotScraping({
-                    url: apiUrl,
-                    method: 'POST',
-                    json: {
-                        specialty: spec,
-                        city: cty || '',
-                        page: page,
-                        limit: 20
-                    },
-                    responseType: 'json',
-                    timeout: { request: 30000 },
-                });
-
-                if (response.body && response.body.doctors) {
-                    return {
-                        doctors: response.body.doctors,
-                        totalPages: response.body.totalPages || 1,
-                        success: true
-                    };
+        const parseAvailableServices = (service) => {
+            if (!service) return [];
+            const normalize = (value) => {
+                if (Array.isArray(value)) {
+                    return value.flatMap((node) => normalize(node));
                 }
-                return { success: false };
-            } catch (err) {
-                log.warning(`JSON API failed: ${err.message}`);
-                return { success: false };
-            }
+                if (typeof value === 'object' && value !== null) {
+                    if (value.name) return normalize(value.name);
+                    return [];
+                }
+                if (typeof value === 'string') {
+                    let text = value.trim();
+                    if (text.startsWith('[') && text.endsWith(']')) {
+                        text = text.slice(1, -1);
+                    }
+                    return text
+                        .split(',')
+                        .map(part => part.trim())
+                        .filter(Boolean);
+                }
+                return [];
+            };
+            return Array.from(new Set(normalize(service)));
         };
 
-        const initial = [];
-        if (Array.isArray(startUrls) && startUrls.length) initial.push(...startUrls);
-        if (startUrl) initial.push(startUrl);
-        if (url) initial.push(url);
-        if (!initial.length) initial.push(buildStartUrl(specialty, city));
-
-        const proxyConf = proxyConfiguration ? await Actor.createProxyConfiguration({ ...proxyConfiguration }) : undefined;
-
-        let saved = 0;
-
-        // Try JSON API approach first for better performance, fallback to HTML parsing
-        if (!initial.some(u => u !== buildStartUrl(specialty, city))) {
-            log.info('Attempting JSON API approach...');
-            let currentPage = 1;
-            let hasMorePages = true;
-
-            while (hasMorePages && saved < RESULTS_WANTED && currentPage <= MAX_PAGES) {
-                const apiResult = await fetchDoctorsFromAPI(specialty, city, currentPage);
-                
-                if (apiResult.success && apiResult.doctors && apiResult.doctors.length > 0) {
-                    const doctors = apiResult.doctors.slice(0, RESULTS_WANTED - saved);
-                    
-                    for (const doctor of doctors) {
-                        if (saved >= RESULTS_WANTED) break;
-                        
-                        const item = {
-                            name: doctor.name || null,
-                            specialty: doctor.specialty || specialty || null,
-                            qualifications: doctor.qualifications || null,
-                            experience: doctor.experience || null,
-                            satisfaction: doctor.satisfaction || null,
-                            reviews_count: doctor.reviews || null,
-                            fee: doctor.fee || null,
-                            city: doctor.city || city || null,
-                            hospital: doctor.hospital || null,
-                            available_days: doctor.availableDays || null,
-                            url: doctor.profileUrl ? toAbs(doctor.profileUrl) : null,
-                            pmdc_verified: doctor.pmdcVerified || false,
-                            video_consultation: doctor.videoConsultation || false,
-                        };
-
-                        await Dataset.pushData(item);
-                        saved++;
-                    }
-
-                    log.info(`Page ${currentPage}: Saved ${doctors.length} doctors from JSON API`);
-                    
-                    if (currentPage >= apiResult.totalPages || doctors.length < 20) {
-                        hasMorePages = false;
-                    }
-                    currentPage++;
-                } else {
-                    log.info('JSON API failed or returned no data, falling back to HTML parsing');
-                    break;
-                }
-            }
-
-            if (saved >= RESULTS_WANTED) {
-                log.info(`Finished via JSON API. Saved ${saved} doctors`);
-                return;
-            }
-        }
-
-        function extractFromJsonLd($) {
-            const scripts = $('script[type="application/ld+json"]');
-            for (let i = 0; i < scripts.length; i++) {
+        const collectJsonLdEntries = ($) => {
+            const entries = [];
+            $('script[type="application/ld+json"]').each((_, script) => {
+                const payload = $(script).html();
+                if (!payload) return;
                 try {
-                    const parsed = JSON.parse($(scripts[i]).html() || '');
+                    const parsed = JSON.parse(payload);
                     const arr = Array.isArray(parsed) ? parsed : [parsed];
-                    for (const e of arr) {
-                        if (!e) continue;
-                        const t = e['@type'] || e.type;
-                        if (t === 'Physician' || t === 'MedicalBusiness' || (Array.isArray(t) && (t.includes('Physician') || t.includes('Person')))) {
-                            return {
-                                name: e.name || null,
-                                specialty: e.medicalSpecialty || null,
-                                description: e.description || null,
-                                address: e.address || null,
-                            };
+                    for (const entry of arr) {
+                        if (!entry) continue;
+                        const type = entry['@type'] || entry.type;
+                        const types = Array.isArray(type) ? type : [type];
+                        if (types.some(t => t === 'Physician' || t === 'MedicalBusiness' || t === 'Person')) {
+                            entries.push(entry);
                         }
                     }
-                } catch (e) { /* ignore parsing errors */ }
+                } catch (err) {
+                    // ignore malformed scripts
+                }
+            });
+            return entries;
+        };
+
+        const normalizeEntryUrl = (entry) => {
+            if (!entry) return null;
+            const href = entry.url || entry['@id'] || entry['@context'];
+            if (!href) return null;
+            return toAbs(href);
+        };
+
+        const createJsonLdMap = (entries) => {
+            const map = new Map();
+            for (const entry of entries) {
+                const url = normalizeEntryUrl(entry);
+                if (!url) continue;
+                map.set(url, entry);
+            }
+            return map;
+        };
+
+        const extractFromJsonLd = ($, targetUrl = '') => {
+            const entries = collectJsonLdEntries($);
+            for (const entry of entries) {
+                const entryUrl = normalizeEntryUrl(entry);
+                if (targetUrl && entryUrl !== targetUrl) continue;
+                return {
+                    name: entry.name || null,
+                    specialty: typeof entry.medicalSpecialty === 'string' ? entry.medicalSpecialty : entry.medicalSpecialty?.name || null,
+                    description: entry.description || null,
+                    hospitals: Array.isArray(entry.hospitalAffiliation)
+                        ? entry.hospitalAffiliation.map(h => h.name).filter(Boolean)
+                        : [],
+                    services: parseAvailableServices(entry.AvailableService),
+                    fee: entry.priceRange || null,
+                    address: entry.address || null,
+                    url: entryUrl,
+                };
             }
             return null;
-        }
+        };
 
-        function parseDoctorCard($, card) {
-            const name = $(card).find('h3, h2, .doctor-name, [class*="name"]').first().text().trim() || null;
-            const specialty = $(card).find('.specialty, [class*="specialty"]').first().text().trim() || null;
-            const qualifications = $(card).find('.qualifications, [class*="qualification"]').first().text().trim() || null;
-            const experience = $(card).find('[class*="experience"], .experience').first().text().trim() || null;
-            const reviews = $(card).find('[class*="reviews"], .reviews').first().text().trim() || null;
-            const satisfaction = $(card).find('[class*="satisfaction"], .satisfaction').first().text().trim() || null;
-            const fee = $(card).find('[class*="fee"], .fee, [class*="price"]').first().text().trim() || null;
-            const hospital = $(card).find('[class*="hospital"], .hospital, [class*="clinic"]').first().text().trim() || null;
-            
-            const profileLink = $(card).find('a[href*="/doctors/"]').first().attr('href');
-            const profileUrl = profileLink ? toAbs(profileLink) : null;
-            
-            const pmdcVerified = $(card).text().includes('PMDC Verified') || $(card).find('[class*="verified"]').length > 0;
-            const videoConsultation = $(card).text().includes('Video Consultation') || $(card).text().includes('Video Call');
+        const parseDoctorCard = ($, card, jsonMap, specialtyFallback, cityFallback) => {
+            const profileLink = $(card)
+                .find('.dr_profile_open_frm_listing_btn_vprofile, .dr_profile_opened_from_listing')
+                .filter((_, el) => {
+                    const href = $(el).attr('href');
+                    return href && href.includes('/doctors/');
+                })
+                .first();
+
+            const profileUrl = profileLink.length ? toAbs(profileLink.attr('href')) : null;
+            const jsonEntry = profileUrl ? jsonMap.get(profileUrl) : null;
+
+            const name = $(card).find('h3').first().text().trim() || jsonEntry?.name || null;
+            const specialtyText = $(card).find('p.mb-0.mt-10.text-sm').first().text().trim();
+            const specialty = specialtyText || jsonEntry?.specialty || specialtyFallback || null;
+            const qualificationEl = $(card).find('p.text-sm').filter((_, el) => !$(el).hasClass('mb-0')).first();
+            const qualifications = qualificationEl.text().trim() || null;
+
+            const stats = {};
+            $(card).find('p.mb-0.text-sm').each((_, el) => {
+                const key = $(el).text().trim().toLowerCase();
+                const value = $(el).next('p').first().text().trim();
+                if (key) stats[key] = value || stats[key];
+            });
+
+            const reviews = stats.reviews?.replace(/[^\d]/g, '') || null;
+            const experience = stats.experience || null;
+            const satisfaction = stats.satisfaction || null;
+
+            const appointmentBlock = $(card).find('.product-card[data-amount]').first();
+            const feeAmount = appointmentBlock.attr('data-amount');
+            const feeText = feeAmount ? `Rs. ${feeAmount}` : $(card).find('p.price').first().text().trim() || jsonEntry?.fee || null;
+
+            const hospitalSet = new Set();
+            $(card).find('.product-card[data-hospitalname]').each((_, el) => {
+                const hospital = $(el).attr('data-hospitalname');
+                if (hospital) hospitalSet.add(hospital.trim());
+            });
+            if (Array.isArray(jsonEntry?.hospitals)) {
+                jsonEntry.hospitals.forEach((hName) => { if (hName) hospitalSet.add(hName); });
+            }
+
+            const servicesSet = new Set();
+            $(card).find('.chips-highlight').each((_, el) => {
+                const text = $(el).text().trim();
+                if (text) servicesSet.add(text);
+            });
+            if (Array.isArray(jsonEntry?.services)) {
+                jsonEntry.services.forEach((record) => { if (record) servicesSet.add(record); });
+            }
+
+            const availableDays = appointmentBlock.attr('data-displaydayname') || null;
+            const cityValue = cityFallback || appointmentBlock.attr('data-hospitalcity') || jsonEntry?.address?.addressLocality || null;
+            const pmdcVerified = $(card).find('span.text-green').text().toLowerCase().includes('pmdc verified') ||
+                $(card).text().toLowerCase().includes('pmdc verified');
+            const videoConsultation = $(card).find('.dr_profile_opened_from_listing_btn_vcall').length > 0;
 
             return {
                 name,
@@ -188,71 +195,173 @@ async function main() {
                 experience,
                 reviews_count: reviews,
                 satisfaction,
-                fee,
-                hospital,
+                fee: feeText,
+                city: cityValue,
+                hospitals: hospitalSet.size > 0 ? Array.from(hospitalSet) : null,
+                available_days: availableDays,
+                services: servicesSet.size > 0 ? Array.from(servicesSet) : null,
+                about: jsonEntry?.description || null,
                 url: profileUrl,
                 pmdc_verified: pmdcVerified,
                 video_consultation: videoConsultation,
+                _source: 'marham.pk',
             };
-        }
+        };
 
-        function findDoctorCards($) {
-            const cards = [];
-            // Multiple selector strategies for doctor cards
-            const possibleSelectors = [
+        const findDoctorCards = ($) => {
+            const selectors = [
+                '#doctor-listing1 .row.shadow-card',
+                '.row.shadow-card',
                 'div[class*="doctor-card"]',
-                'div[class*="DoctorCard"]',
                 'article[class*="doctor"]',
-                'div[class*="listing"]',
-                'div.card',
                 '[data-doctor-id]',
             ];
-
-            for (const selector of possibleSelectors) {
+            const cards = [];
+            for (const selector of selectors) {
                 const elements = $(selector);
-                if (elements.length > 0) {
-                    elements.each((_, card) => {
-                        const hasProfileLink = $(card).find('a[href*="/doctors/"]').length > 0;
-                        if (hasProfileLink) cards.push(card);
-                    });
-                    if (cards.length > 0) break;
+                if (elements.length === 0) continue;
+                elements.each((_, card) => {
+                    const hasLink = $(card).find('a[href*="/doctors/"]').length > 0;
+                    if (hasLink) cards.push(card);
+                });
+                if (cards.length) break;
+            }
+            return cards;
+        };
+
+        const findNextPage = (request) => {
+            const currentUrl = new URL(request.url);
+            const currentPage = Number(currentUrl.searchParams.get('page') || '1');
+            currentUrl.searchParams.set('page', (currentPage + 1).toString());
+            return currentUrl.href;
+        };
+
+        const defaultStartUrl = buildStartUrl(specialty, city);
+        const initial = [];
+        if (Array.isArray(startUrls) && startUrls.length) initial.push(...startUrls.filter(Boolean));
+        if (startUrl) initial.push(startUrl);
+        if (url) initial.push(url);
+        if (!initial.length) initial.push(defaultStartUrl);
+
+        const proxyConf = await Actor.createProxyConfiguration(proxyConfiguration || {});
+        let saved = 0;
+
+        const fetchDoctorsFromAPI = async (spec, cty, page = 1) => {
+            const apiUrl = 'https://www.marham.pk/api/doctors/search';
+            const refererUrl = buildStartUrl(spec, cty);
+            const headers = {
+                ...getStealthHeaders(refererUrl),
+                'x-requested-with': 'XMLHttpRequest',
+                'content-type': 'application/json; charset=UTF-8',
+            };
+            try {
+                const response = await gotScraping({
+                    url: apiUrl,
+                    method: 'POST',
+                    json: {
+                        specialty: spec,
+                        speciality: spec,
+                        city: cty || '',
+                        page,
+                        limit: JSON_API_LIMIT,
+                    },
+                    responseType: 'json',
+                    headers,
+                    timeout: { request: 30000 },
+                    proxyUrl: proxyConf?.newUrl(),
+                });
+
+                const payload = response.body?.data ?? response.body ?? {};
+                const doctors = payload?.doctors ?? payload?.results ?? payload?.items ?? [];
+                const totalPages = Number.isFinite(+payload?.totalPages)
+                    ? Number(payload.totalPages)
+                    : Number.isFinite(+payload?.lastPage)
+                        ? Number(payload.lastPage)
+                        : Number.isFinite(+payload?.last_page)
+                            ? Number(payload.last_page)
+                            : 1;
+                const success = Array.isArray(doctors) && doctors.length > 0;
+                return {
+                    success,
+                    doctors,
+                    totalPages: totalPages || 1,
+                };
+            } catch (err) {
+                log.warning(`JSON API failed (page ${page}): ${err.message}`);
+                return { success: false };
+            }
+        };
+
+        const canUseJsonApi = useJsonApi && initial.length === 1 && initial[0] === defaultStartUrl;
+        if (canUseJsonApi) {
+            log.info('Attempting JSON API approach...');
+            let currentPage = 1;
+            let hasMorePages = true;
+
+            while (hasMorePages && saved < RESULTS_WANTED && currentPage <= MAX_PAGES) {
+                const apiResult = await fetchDoctorsFromAPI(specialty, city, currentPage);
+                if (apiResult.success) {
+                    const remaining = Math.max(0, RESULTS_WANTED - saved);
+                    const doctors = apiResult.doctors.slice(0, remaining);
+
+                    for (const doctor of doctors) {
+                        if (saved >= RESULTS_WANTED) break;
+                        const item = {
+                            name: doctor.name || null,
+                            specialty: doctor.speciality || doctor.specialty || specialty || null,
+                            qualifications: doctor.qualifications || null,
+                            experience: doctor.experience || null,
+                            satisfaction: doctor.satisfaction || null,
+                            reviews_count: doctor.reviews || null,
+                            fee: doctor.fee || null,
+                            city: doctor.city || city || null,
+                            hospitals: doctor.hospitals ?? (doctor.hospital ? [doctor.hospital] : null),
+                            available_days: doctor.availableDays || doctor.availability || null,
+                            services: doctor.services ?? null,
+                            about: doctor.description || null,
+                            url: doctor.profileUrl ? toAbs(doctor.profileUrl) : null,
+                            pmdc_verified: doctor.pmdcVerified || false,
+                            video_consultation: doctor.videoConsultation || false,
+                            _source: 'marham.pk',
+                        };
+                        await Dataset.pushData(item);
+                        saved++;
+                    }
+
+                    log.info(`Page ${currentPage}: Saved ${doctors.length} doctors from JSON API`);
+                    currentPage++;
+                    hasMorePages = currentPage <= Math.max(1, apiResult.totalPages);
+                } else {
+                    log.warning('JSON API returned no data, falling back to HTML parsing');
+                    hasMorePages = false;
                 }
             }
 
-            return cards;
-        }
-
-        function findNextPage($, base) {
-            // Look for pagination links
-            const nextLink = $('a[rel="next"]').attr('href');
-            if (nextLink) return toAbs(nextLink, base);
-            
-            const loadMore = $('a, button').filter((_, el) => {
-                const text = $(el).text().toLowerCase();
-                return text.includes('load more') || text.includes('next') || text.includes('›') || text.includes('»');
-            }).first().attr('href');
-            
-            if (loadMore) return toAbs(loadMore, base);
-
-            // Check for page number links
-            const pageLinks = $('a[href*="page="], a[href*="/page/"]');
-            if (pageLinks.length > 0) {
-                const currentUrl = new URL(base);
-                const currentPage = parseInt(currentUrl.searchParams.get('page') || '1');
-                const nextPage = currentPage + 1;
-                currentUrl.searchParams.set('page', nextPage.toString());
-                return currentUrl.href;
+            if (saved >= RESULTS_WANTED) {
+                log.info(`Finished via JSON API. Saved ${saved} doctors`);
+                return;
             }
-
-            return null;
+            if (!allowHtmlFallback) {
+                throw new Error('JSON API did not return enough results and HTML fallback is disabled.');
+            }
+        } else if (useJsonApi) {
+            log.info('Skipping JSON API because a custom start URL was supplied');
         }
 
         const crawler = new CheerioCrawler({
             proxyConfiguration: proxyConf,
             maxRequestRetries: 3,
             useSessionPool: true,
-            maxConcurrency: 5,
+            maxConcurrency: Math.min(10, Math.max(2, Math.ceil(RESULTS_WANTED / 25))),
             requestHandlerTimeoutSecs: 60,
+            prepareRequestFunction({ request }) {
+                const referer = request.userData?.referer || request.url;
+                request.headers = {
+                    ...request.headers,
+                    ...getStealthHeaders(referer),
+                };
+                return request;
+            },
             async requestHandler({ request, $, enqueueLinks, log: crawlerLog }) {
                 const label = request.userData?.label || 'LIST';
                 const pageNo = request.userData?.pageNo || 1;
@@ -270,20 +379,17 @@ async function main() {
 
                     const doctorLinks = [];
                     const quickData = [];
+                    const jsonLdMap = createJsonLdMap(collectJsonLdEntries($));
 
                     for (const card of doctorCards) {
                         if (saved >= RESULTS_WANTED) break;
 
-                        const parsed = parseDoctorCard($, card);
+                        const parsed = parseDoctorCard($, card, jsonLdMap, specialty, city);
                         
                         if (collectDetails && parsed.url) {
                             doctorLinks.push(parsed.url);
                         } else {
-                            quickData.push({
-                                ...parsed,
-                                city: city || null,
-                                _source: 'marham.pk',
-                            });
+                            quickData.push(parsed);
                         }
                     }
 
@@ -302,7 +408,7 @@ async function main() {
                     }
 
                     if (saved < RESULTS_WANTED && pageNo < MAX_PAGES) {
-                        const next = findNextPage($, request.url);
+                        const next = findNextPage(request);
                         if (next) {
                             crawlerLog.info(`Enqueueing next page: ${next}`);
                             await enqueueLinks({ urls: [next], userData: { label: 'LIST', pageNo: pageNo + 1 } });
@@ -319,8 +425,8 @@ async function main() {
                     try {
                         crawlerLog.info(`Processing DETAIL page: ${request.url}`);
                         
-                        const json = extractFromJsonLd($);
-                        let data = json || {};
+                        const json = extractFromJsonLd($, request.url);
+                        const data = json || {};
 
                         // Extract doctor information from detail page
                         if (!data.name) data.name = $('h1, [class*="doctor-name"]').first().text().trim() || null;
@@ -333,28 +439,35 @@ async function main() {
                         const fee = $('[class*="fee"], [class*="price"]').text().trim() || null;
                         
                         // Extract hospital/clinic information
-                        const hospitals = [];
+                        const hospitals = new Set();
                         $('[class*="hospital"], [class*="clinic"], [class*="location"]').each((_, el) => {
                             const text = $(el).text().trim();
-                            if (text && text.length > 5) hospitals.push(text);
+                            if (text && text.length > 5) hospitals.add(text);
                         });
+                        if (Array.isArray(data.hospitals)) {
+                            data.hospitals.forEach((hd) => { if (hd) hospitals.add(hd); });
+                        }
 
                         // Extract available days/times
                         const availability = $('[class*="available"], [class*="timing"], [class*="schedule"]').text().trim() || null;
 
                         // Extract services offered
-                        const services = [];
+                        const services = new Set();
                         $('[class*="service"], [class*="treatment"]').each((_, el) => {
                             const text = $(el).text().trim();
-                            if (text && text.length > 2) services.push(text);
+                            if (text && text.length > 2) services.add(text);
                         });
+                        if (Array.isArray(data.services)) {
+                            data.services.forEach((svc) => { if (svc) services.add(svc); });
+                        }
 
                         // Extract about/bio
-                        const about = $('[class*="about"], [class*="bio"], [class*="description"]').first().text().trim() || null;
+                        const about = data.description || $('[class*="about"], [class*="bio"], [class*="description"]').first().text().trim() || null;
 
                         const pmdcVerified = $.text().includes('PMDC Verified') || $('[class*="verified"]').length > 0;
                         const videoConsultation = $.text().includes('Video Consultation') || $.text().includes('Video Call');
 
+                        const cityValue = city || data.address?.addressLocality || null;
                         const item = {
                             name: data.name || null,
                             specialty: data.specialty || null,
@@ -362,11 +475,11 @@ async function main() {
                             experience: experience ? `${experience} years` : null,
                             reviews_count: reviews || null,
                             satisfaction: satisfaction ? `${satisfaction}%` : null,
-                            fee: fee || null,
-                            city: city || null,
-                            hospitals: hospitals.length > 0 ? hospitals : null,
+                            fee: fee || data.fee || null,
+                            city: cityValue,
+                            hospitals: hospitals.size > 0 ? Array.from(hospitals) : null,
                             available_days: availability || null,
-                            services: services.length > 0 ? services : null,
+                            services: services.size > 0 ? Array.from(services) : null,
                             about: about || null,
                             url: request.url,
                             pmdc_verified: pmdcVerified,
