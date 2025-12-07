@@ -348,9 +348,11 @@ async function main() {
             requestHandlerTimeoutSecs: 60,
 
             // Add explicit pre-navigation hook to verify request start
-            async preNavigationHooks([context, gotoOptions]) {
-                context.log.info(`Preparing to navigate to ${context.request.url}`);
-            },
+            preNavigationHooks: [
+                async ({ request, log }) => {
+                    log.info(`Preparing to navigate to ${request.url}`);
+                }
+            ],
 
             prepareRequestFunction({ request }) {
                 request.headers = {
