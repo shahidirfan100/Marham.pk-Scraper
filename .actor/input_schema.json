@@ -1,13 +1,13 @@
 {
   "title": "Marham.pk Doctors Scraper",
-  "description": "Extract doctor listings from Marham.pk, Pakistan's leading healthcare platform. Search by specialty and city to find verified doctors with their qualifications, fees, reviews, and contact information. Supports JSON API and HTML parsing.",
+  "description": "Extract doctor listings from Marham.pk, Pakistan's leading healthcare platform. Search by specialty and city to find verified doctors with qualifications, fees, reviews, and contact information using sitemap and JSON-LD extraction.",
   "type": "object",
   "schemaVersion": 1,
   "properties": {
     "startUrls": {
       "title": "Start URLs (optional)",
       "type": "array",
-      "description": "Array of Marham.pk URLs to scrape. If provided, specialty and city will be ignored.",
+      "description": "Array of Marham.pk doctor profile URLs to scrape. If provided, specialty and city filters will be ignored.",
       "editor": "stringList"
     },
     "specialty": {
@@ -15,7 +15,8 @@
       "type": "string",
       "description": "Medical specialty to search for (e.g., 'dermatologist', 'cardiologist', 'pediatrician', 'gynecologist', 'orthopedic', 'neurologist').",
       "editor": "textfield",
-      "prefill": "dermatologist"
+      "prefill": "dermatologist",
+      "default": "dermatologist"
     },
     "city": {
       "title": "City",
@@ -25,28 +26,14 @@
       "prefill": "lahore",
       "default": "lahore"
     },
-    "collectDetails": {
-      "title": "Collect detailed information",
-      "type": "boolean",
-      "description": "If enabled, the scraper visits each doctor's profile page to extract additional information like services, about section, and hospital details.",
-      "editor": "checkbox",
-      "default": true
-    },
     "results_wanted": {
       "title": "Maximum number of doctors",
       "type": "integer",
-      "description": "Maximum number of doctor profiles to collect.",
+      "description": "Maximum number of doctor profiles to collect from the sitemap.",
       "minimum": 1,
-      "default": 100,
+      "maximum": 1000,
+      "default": 50,
       "editor": "number"
-    },
-    "max_pages": {
-      "title": "Maximum number of pages",
-      "type": "integer",
-      "description": "Safety limit on the number of listing pages to visit.",
-      "minimum": 1,
-      "editor": "number",
-      "default": 20
     },
     "proxyConfiguration": {
       "title": "Proxy configuration",
@@ -55,7 +42,9 @@
       "editor": "proxy",
       "default": {
         "useApifyProxy": true,
-        "apifyProxyGroups": ["RESIDENTIAL"]
+        "apifyProxyGroups": [
+          "RESIDENTIAL"
+        ]
       }
     }
   },
