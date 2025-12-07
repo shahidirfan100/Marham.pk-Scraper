@@ -96,7 +96,7 @@ const fetchFilteredDoctorUrls = async ({ specialtySlug, citySlug, limit, proxyCo
                 url: sitemapUrl,
                 headers: getStealthHeaders(sitemapUrl),
                 responseType: 'text',
-                proxyUrl: proxyConf?.newUrl(),
+                proxyUrl: proxyConf ? await proxyConf.newUrl() : undefined,
                 timeout: { request: 60000 },
             });
 
@@ -338,12 +338,19 @@ async function main() {
             return;
         }
 
+        log.info(`Prepare to crawl ${urlsToCrawl.length} URLs. First URL: ${urlsToCrawl[0]}`);
+
         const crawler = new CheerioCrawler({
             proxyConfiguration: proxyConf,
             maxRequestRetries: 3,
             useSessionPool: true,
-            maxConcurrency: Math.min(15, Math.max(3, Math.ceil(RESULTS_WANTED / 10))),
-            requestHandlerTimeoutSecs: 45,
+            maxConcurrency: 5, // Reduced for stability during debug
+            requestHandlerTimeoutSecs: 60,
+
+            // Add explicit pre-navigation hook to verify request start
+            async preNavigationHooks([context, gotoOptions]) {
+                context.log.info(`Preparing to navigate to ${context.request.url}`);
+            },
 
             prepareRequestFunction({ request }) {
                 request.headers = {
@@ -387,8 +394,16 @@ async function main() {
             },
         });
 
-        await crawler.run(urlsToCrawl.map(url => ({ url })));
+        // Use uniqueKey to ensure requests are not skipped due to deduplication from previous runs
+        const runId = Math.random().toString(36).substring(7);
+        await crawler.run(urlsToCrawl.map(url => ({
+            url,
+            uniqueKey: `${url}#${runId}`
+        })));
+
         log.info(`Finished. Saved ${saved} doctors.`);
+    } catch (err) {
+        log.error(`Critical error in main loop: ${err.message}`);
     } finally {
         await Actor.exit();
     }
