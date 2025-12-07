@@ -29,7 +29,7 @@ Configure the scraper with these parameters:
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| **city** | String | - | Filter by city (e.g., `lahore`, `karachi`, `islamabad`) |
+| **city** | String | `lahore` | Filter by city (e.g., `lahore`, `karachi`, `islamabad`) |
 | **results_wanted** | Integer | 100 | Maximum number of doctors to extract |
 | **max_pages** | Integer | 20 | Safety limit on pages to scrape |
 | **collectDetails** | Boolean | true | Visit each doctor's profile for detailed information |

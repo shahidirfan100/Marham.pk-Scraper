@@ -25,6 +25,8 @@ async function main() {
             url,
             proxyConfiguration,
         } = input;
+        const inputCity = typeof city === 'string' ? city.trim() : '';
+        const cityForRun = inputCity || 'lahore';
 
         const RESULTS_WANTED = Number.isFinite(+RESULTS_WANTED_RAW) ? Math.max(1, +RESULTS_WANTED_RAW) : Number.MAX_SAFE_INTEGER;
         const MAX_PAGES = Number.isFinite(+MAX_PAGES_RAW) ? Math.max(1, +MAX_PAGES_RAW) : 20;
@@ -236,7 +238,7 @@ async function main() {
             return currentUrl.href;
         };
 
-        const defaultStartUrl = buildStartUrl(specialty, city);
+        const defaultStartUrl = buildStartUrl(specialty, cityForRun);
         const initial = [];
         if (Array.isArray(startUrls) && startUrls.length) initial.push(...startUrls.filter(Boolean));
         if (startUrl) initial.push(startUrl);
@@ -299,7 +301,7 @@ async function main() {
             let hasMorePages = true;
 
             while (hasMorePages && saved < RESULTS_WANTED && currentPage <= MAX_PAGES) {
-                const apiResult = await fetchDoctorsFromAPI(specialty, city, currentPage);
+            const apiResult = await fetchDoctorsFromAPI(specialty, cityForRun, currentPage);
                 if (apiResult.success) {
                     const remaining = Math.max(0, RESULTS_WANTED - saved);
                     const doctors = apiResult.doctors.slice(0, remaining);
@@ -314,7 +316,7 @@ async function main() {
                             satisfaction: doctor.satisfaction || null,
                             reviews_count: doctor.reviews || null,
                             fee: doctor.fee || null,
-                            city: doctor.city || city || null,
+                            city: doctor.city || cityForRun || null,
                             hospitals: doctor.hospitals ?? (doctor.hospital ? [doctor.hospital] : null),
                             available_days: doctor.availableDays || doctor.availability || null,
                             services: doctor.services ?? null,
@@ -384,7 +386,7 @@ async function main() {
                     for (const card of doctorCards) {
                         if (saved >= RESULTS_WANTED) break;
 
-                        const parsed = parseDoctorCard($, card, jsonLdMap, specialty, city);
+                        const parsed = parseDoctorCard($, card, jsonLdMap, specialty, cityForRun);
                         
                         if (collectDetails && parsed.url) {
                             doctorLinks.push(parsed.url);
@@ -467,7 +469,7 @@ async function main() {
                         const pmdcVerified = $.text().includes('PMDC Verified') || $('[class*="verified"]').length > 0;
                         const videoConsultation = $.text().includes('Video Consultation') || $.text().includes('Video Call');
 
-                        const cityValue = city || data.address?.addressLocality || null;
+                        const cityValue = data.address?.addressLocality || cityForRun || null;
                         const item = {
                             name: data.name || null,
                             specialty: data.specialty || null,

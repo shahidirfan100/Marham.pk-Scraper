@@ -22,7 +22,8 @@
       "type": "string",
       "description": "City to search in (e.g., 'lahore', 'karachi', 'islamabad', 'rawalpindi', 'faisalabad'). Leave empty for all cities.",
       "editor": "textfield",
-      "prefill": "lahore"
+      "prefill": "lahore",
+      "default": "lahore"
     },
     "collectDetails": {
       "title": "Collect detailed information",
