@@ -1,0 +1,7 @@
+{
+  "specialty": "dermatologist",
+  "city": "lahore",
+  "results_wanted": 50,
+  "max_pages": 5,
+  "collectDetails": true
+}

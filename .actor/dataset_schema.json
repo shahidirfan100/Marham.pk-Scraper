@@ -1,0 +1,73 @@
+{
+  "actorSpecification": 1,
+  "fields": {},
+  "views": {
+    "overview": {
+      "title": "Overview",
+      "transformation": {
+        "fields": [
+          "name",
+          "specialty",
+          "qualifications",
+          "experience",
+          "city",
+          "fee",
+          "satisfaction",
+          "reviews_count",
+          "pmdc_verified",
+          "video_consultation",
+          "url"
+        ]
+      },
+      "display": {
+        "component": "table",
+        "properties": {
+          "name": {
+            "label": "Doctor Name",
+            "format": "text"
+          },
+          "specialty": {
+            "label": "Specialty",
+            "format": "text"
+          },
+          "qualifications": {
+            "label": "Qualifications",
+            "format": "text"
+          },
+          "experience": {
+            "label": "Experience",
+            "format": "text"
+          },
+          "city": {
+            "label": "City",
+            "format": "text"
+          },
+          "fee": {
+            "label": "Fee",
+            "format": "text"
+          },
+          "satisfaction": {
+            "label": "Satisfaction",
+            "format": "text"
+          },
+          "reviews_count": {
+            "label": "Reviews",
+            "format": "text"
+          },
+          "pmdc_verified": {
+            "label": "PMDC Verified",
+            "format": "text"
+          },
+          "video_consultation": {
+            "label": "Video Consultation",
+            "format": "text"
+          },
+          "url": {
+            "label": "Profile URL",
+            "format": "link"
+          }
+        }
+      }
+    }
+  }
+}
