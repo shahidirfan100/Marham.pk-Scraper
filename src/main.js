@@ -188,12 +188,12 @@ const extractFromHtml = ($, url) => {
         null;
 
     // Extract specialty
-    const specialty = $('.specialty, [class*="specialty"]').first().text().trim() ||
+    const specialty = $('.specialty, [class*="specialty"], p.mt-10 strong.text-sm').first().text().trim() ||
         $('meta[name="keywords"]').attr('content')?.split(',')[0]?.trim() ||
         null;
 
     // Extract qualifications
-    const qualifications = $('.qualifications, [class*="qualification"], [class*="degree"]').first().text().trim() || null;
+    const qualifications = $('p.text-sm.mb-0').text().trim() || null;
 
     // Extract experience - look for "X Years" pattern
     const experienceText = $('[class*="experience"]').text() || $('body').text();
@@ -203,7 +203,13 @@ const extractFromHtml = ($, url) => {
     // Extract reviews count
     const reviewsText = $('[class*="review"]').text();
     const reviewMatch = reviewsText.match(/(\d+)/);
-    const reviews = reviewMatch ? reviewMatch[1] : null;
+    let reviews = reviewMatch ? reviewMatch[1] : null;
+    if (!reviews) {
+        // Try to extract from script
+        const scriptText = $('script').filter((_, el) => $(el).html().includes('numberOfReviews')).html();
+        const scriptMatch = scriptText?.match(/numberOfReviews = "(\d+)"/);
+        reviews = scriptMatch ? scriptMatch[1] : null;
+    }
 
     // Extract satisfaction
     const satText = $('[class*="satisfaction"]').text();
