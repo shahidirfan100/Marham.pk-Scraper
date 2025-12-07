@@ -356,7 +356,7 @@ async function main() {
             // Add explicit pre-navigation hook to verify request start
             preNavigationHooks: [
                 async ({ request, log }) => {
-                    log.info(`Preparing to navigate to ${request.url}`);
+                    log.debug(`Preparing to navigate to ${request.url}`);
                     request.headers = {
                         ...request.headers,
                         ...getStealthHeaders(request.url),
@@ -367,7 +367,7 @@ async function main() {
             async requestHandler({ request, $, log: crawlerLog }) {
                 if (saved >= RESULTS_WANTED) return;
 
-                crawlerLog.info(`Processing: ${request.url}`);
+                crawlerLog.debug(`Processing: ${request.url}`);
 
                 try {
                     // Extract data from JSON-LD (primary source)
@@ -387,7 +387,7 @@ async function main() {
 
                     await Dataset.pushData(doctorData);
                     saved++;
-                    crawlerLog.info(`Saved doctor ${saved}/${RESULTS_WANTED}: ${doctorData.name}`);
+                    crawlerLog.debug(`Saved doctor ${saved}/${RESULTS_WANTED}: ${doctorData.name}`);
                 } catch (err) {
                     crawlerLog.error(`Failed to process ${request.url}: ${err.message}`);
                 }
