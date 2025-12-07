@@ -351,16 +351,12 @@ async function main() {
             preNavigationHooks: [
                 async ({ request, log }) => {
                     log.info(`Preparing to navigate to ${request.url}`);
+                    request.headers = {
+                        ...request.headers,
+                        ...getStealthHeaders(request.url),
+                    };
                 }
             ],
-
-            prepareRequestFunction({ request }) {
-                request.headers = {
-                    ...request.headers,
-                    ...getStealthHeaders(request.url),
-                };
-                return request;
-            },
 
             async requestHandler({ request, $, log: crawlerLog }) {
                 if (saved >= RESULTS_WANTED) return;
